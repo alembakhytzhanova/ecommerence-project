@@ -3,6 +3,7 @@ package controllers
 import (
 	"alem/database"
 	"alem/models"
+	generate "alem/token"
 	"context"
 	"fmt"
 	"log"
@@ -22,23 +23,19 @@ var ProductCollection *mongo.Collection = database.ProductData(database.Client, 
 var Validate = validator.New()
 
 func HashPassword(password string) string {
-
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), 14)
 	if err != nil {
 		log.Panic(err)
 	}
 	return string(bytes)
-
 }
 
-func VerifyPAssword(userPassword string, givenPassword string) (bool, string) {
-	err := bcrypt.CompareHashAndPassword([]byte(givenPassword), []byte(userPassword))
+func VerifyPassword(userpassword string, givenpassword string) (bool, string) {
+	err := bcrypt.CompareHashAndPassword([]byte(givenpassword), []byte(userpassword))
 	valid := true
-
 	msg := ""
-
 	if err != nil {
-		msg = "Login or Password is incorrect"
+		msg = "Login Or Passowrd is Incorerct"
 		valid = false
 	}
 	return valid, msg
@@ -48,17 +45,17 @@ func SignUp() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var ctx, cancel = context.WithTimeout(context.Background(), 100*time.Second)
 		defer cancel()
-
 		var user models.User
 		if err := c.BindJSON(&user); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		validationERR := Validate.Struct(user)
-		if validationERR != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": validationERR})
+		validationErr := Validate.Struct(user)
+		if validationErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": validationErr})
 			return
 		}
+
 		count, err := UserCollection.CountDocuments(ctx, bson.M{"email": user.Email})
 		if err != nil {
 			log.Panic(err)
@@ -66,19 +63,17 @@ func SignUp() gin.HandlerFunc {
 			return
 		}
 		if count > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "user already exist"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "User already exists"})
 		}
-		UserCollection.CountDocuments(ctx, bson.M{"phone": user.Phone})
-
+		count, err = UserCollection.CountDocuments(ctx, bson.M{"phone": user.Phone})
 		defer cancel()
 		if err != nil {
 			log.Panic(err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err})
 			return
 		}
-
 		if count > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "this phone no. is already in use"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Phone is already in use"})
 			return
 		}
 		password := HashPassword(*user.Password)
@@ -91,60 +86,68 @@ func SignUp() gin.HandlerFunc {
 		token, refreshtoken, _ := generate.TokenGenerator(*user.Email, *user.First_Name, *user.Last_Name, user.User_ID)
 		user.Token = &token
 		user.Refresh_Token = &refreshtoken
-		user.UserCart = make([]models.ProductUSer, 0)
+		user.UserCart = make([]models.ProductUser, 0)
 		user.Address_Details = make([]models.Address, 0)
 		user.Order_Status = make([]models.Order, 0)
 		_, inserterr := UserCollection.InsertOne(ctx, user)
 		if inserterr != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "the user did not get created"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "not created"})
 			return
 		}
 		defer cancel()
-
-		c.JSON(http.StatusCreated, "Successfully signed in!")
-
+		c.JSON(http.StatusCreated, "Successfully Signed Up!!")
 	}
-
 }
 
 func Login() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var ctx, cancel = context.WithTimeout(context.Background(), 100*time.Second)
 		defer cancel()
-
 		var user models.User
+		var founduser models.User
 		if err := c.BindJSON(&user); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err})
 			return
 		}
-		//check that user is exist in database
 		err := UserCollection.FindOne(ctx, bson.M{"email": user.Email}).Decode(&founduser)
 		defer cancel()
-
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "login or password incorrect"})
 			return
 		}
-		PasswordIsValid, msg := VerifyPAssword(*user.Password, *founduser.Password)
-
+		PasswordIsValid, msg := VerifyPassword(*user.Password, *founduser.Password)
 		defer cancel()
-		// password is not valid
 		if !PasswordIsValid {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": msg})
-			fmt.Print(msg)
+			fmt.Println(msg)
 			return
 		}
-		token, refreshToken, _ := generate.TokenGenerator(*founderuser.Email, *founduser.First_Name, *founderuser.Last_Name, founduser.User_ID)
+		token, refreshToken, _ := generate.TokenGenerator(*founduser.Email, *founduser.First_Name, *founduser.Last_Name, founduser.User_ID)
 		defer cancel()
-
-		generate.UpdateAllTokens(token, refreshToken, founderuser.User_ID)
+		generate.UpdateAllTokens(token, refreshToken, founduser.User_ID)
 		c.JSON(http.StatusFound, founduser)
-	}
 
+	}
 }
 
 func ProductViewerAdmin() gin.HandlerFunc {
-
+	return func(c *gin.Context) {
+		var ctx, cancel = context.WithTimeout(context.Background(), 100*time.Second)
+		var products models.Product
+		defer cancel()
+		if err := c.BindJSON(&products); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		products.Product_ID = primitive.NewObjectID()
+		_, anyerr := ProductCollection.InsertOne(ctx, products)
+		if anyerr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Not Created"})
+			return
+		}
+		defer cancel()
+		c.JSON(http.StatusOK, "Successfully added our Product Admin!!")
+	}
 }
 
 func SearchProduct() gin.HandlerFunc {
@@ -165,7 +168,8 @@ func SearchProduct() gin.HandlerFunc {
 		}
 		defer cursor.Close(ctx)
 		if err := cursor.Err(); err != nil {
-
+			// Don't forget to log errors. I log them really simple here just
+			// to get the point across.
 			log.Println(err)
 			c.IndentedJSON(400, "invalid")
 			return
@@ -175,10 +179,38 @@ func SearchProduct() gin.HandlerFunc {
 
 	}
 }
+
 func SearchProductByQuery() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		var searchProducts []models.Product
-		
+		var searchproducts []models.Product
+		queryParam := c.Query("name")
+		if queryParam == "" {
+			log.Println("query is empty")
+			c.Header("Content-Type", "application/json")
+			c.JSON(http.StatusNotFound, gin.H{"Error": "Invalid Search Index"})
+			c.Abort()
+			return
+		}
+		var ctx, cancel = context.WithTimeout(context.Background(), 100*time.Second)
+		defer cancel()
+		searchquerydb, err := ProductCollection.Find(ctx, bson.M{"product_name": bson.M{"$regex": queryParam}})
+		if err != nil {
+			c.IndentedJSON(404, "something went wrong in fetching the dbquery")
+			return
+		}
+		err = searchquerydb.All(ctx, &searchproducts)
+		if err != nil {
+			log.Println(err)
+			c.IndentedJSON(400, "invalid")
+			return
+		}
+		defer searchquerydb.Close(ctx)
+		if err := searchquerydb.Err(); err != nil {
+			log.Println(err)
+			c.IndentedJSON(400, "invalid request")
+			return
+		}
+		defer cancel()
+		c.IndentedJSON(200, searchproducts)
 	}
-
 }
